@@ -9,11 +9,11 @@ import { SignupModal } from "@/components/signup-modal"
 
 export function CTASection() {
   const router = useRouter()
-  const { user } = useAuth()
+  const { data } = useAuth()
   const [isSignupOpen, setIsSignupOpen] = useState(false)
 
   const handleGetStarted = () => {
-    if (user) {
+    if (data?.user) {
       router.push("/upload")
     } else {
       setIsSignupOpen(true)
