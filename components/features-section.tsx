@@ -47,11 +47,17 @@ export function FeaturesSection() {
         {features.map((feature, index) => (
           <div
             key={index}
-            className="flex flex-col items-center text-center p-6 rounded-lg border bg-card hover:shadow-md transition-shadow"
+            className="group flex flex-col items-center text-center p-6 rounded-lg border bg-card hover:shadow-lg transition-all duration-300 hover:scale-105 hover:border-primary/50 dark:hover:border-primary/30"
           >
-            <div className="mb-4">{feature.icon}</div>
-            <h3 className="text-xl font-medium mb-2">{feature.title}</h3>
-            <p className="text-muted-foreground">{feature.description}</p>
+            <div className="mb-4 transform group-hover:scale-110 transition-transform duration-300">
+              {feature.icon}
+            </div>
+            <h3 className="text-xl font-medium mb-2 group-hover:text-primary transition-colors duration-300">
+              {feature.title}
+            </h3>
+            <p className="text-muted-foreground group-hover:text-foreground transition-colors duration-300">
+              {feature.description}
+            </p>
           </div>
         ))}
       </div>

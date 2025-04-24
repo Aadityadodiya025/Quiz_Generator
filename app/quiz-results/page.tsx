@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Progress } from "@/components/ui/progress"
 import { CheckCircle, XCircle, Home, FileText, Award, Clock, Timer, BarChart } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
+import { useSession } from "next-auth/react"
 
 interface QuizResults {
   quizId: string;
@@ -14,7 +15,7 @@ interface QuizResults {
   score: number;
   totalQuestions: number;
   correctAnswers: number;
-  userAnswers: Record<number, number>;
+  userAnswers: Record<number, number | number[]>;
   completedAt: string;
   timeTaken: number;
   timeAllotted: number;
@@ -26,16 +27,24 @@ export default function QuizResultsPage() {
   const [loading, setLoading] = useState(true)
   const router = useRouter()
   const { toast } = useToast()
+  const { data: session } = useSession()
   
   useEffect(() => {
     // Load results and quiz from session storage
     const storedResults = sessionStorage.getItem("quizResults")
-    const storedQuiz = sessionStorage.getItem("activeQuiz")
     
-    if (storedResults && storedQuiz) {
+    // Try to get quiz data from multiple possible sources
+    let storedQuiz = sessionStorage.getItem("completedQuiz")
+    if (!storedQuiz) {
+      storedQuiz = sessionStorage.getItem("activeQuiz")
+    }
+    if (!storedQuiz) {
+      storedQuiz = sessionStorage.getItem("generatedQuiz")
+    }
+    
+    if (storedResults) {
       try {
         const parsedResults = JSON.parse(storedResults)
-        const parsedQuiz = JSON.parse(storedQuiz)
         
         // Ensure timeTaken and timeAllotted have valid values
         if (!parsedResults.timeTaken || isNaN(parsedResults.timeTaken)) {
@@ -47,7 +56,21 @@ export default function QuizResultsPage() {
         }
         
         setResults(parsedResults)
-        setQuiz(parsedQuiz)
+        
+        // Try to load the quiz data
+        if (storedQuiz) {
+          try {
+            const parsedQuiz = JSON.parse(storedQuiz)
+            setQuiz(parsedQuiz)
+            
+            // Save quiz to history in localStorage (for profile page)
+            saveQuizToHistory(parsedResults, parsedQuiz);
+            
+          } catch (quizError) {
+            console.error("Failed to parse quiz data:", quizError)
+            // Continue without quiz data - we can still show results
+          }
+        }
       } catch (error) {
         console.error("Failed to parse quiz results:", error)
         toast({
@@ -69,6 +92,121 @@ export default function QuizResultsPage() {
     setLoading(false)
   }, [router, toast])
   
+  // Function to save quiz to history in localStorage and database if authenticated
+  const saveQuizToHistory = async (results: QuizResults, quizData: any) => {
+    try {
+      // Create a unique ID for this quiz attempt
+      const quizId = `quiz_${Date.now()}`;
+      
+      // Create a history entry
+      const historyEntry = {
+        id: quizId,
+        title: quizData.title || results.title || "Untitled Quiz",
+        score: results.score,
+        totalQuestions: results.totalQuestions,
+        correctAnswers: results.correctAnswers,
+        date: results.completedAt || new Date().toISOString(),
+        timeTaken: results.timeTaken
+      };
+      
+      // Save to localStorage (regardless of authentication status)
+      let quizHistory = [];
+      const storedHistory = localStorage.getItem("quizHistory");
+      
+      if (storedHistory) {
+        try {
+          quizHistory = JSON.parse(storedHistory);
+          // Ensure it's an array
+          if (!Array.isArray(quizHistory)) {
+            quizHistory = [];
+          }
+        } catch (e) {
+          console.error("Error parsing quiz history:", e);
+          quizHistory = [];
+        }
+      }
+      
+      // Check if this exact quiz already exists (prevent duplicates)
+      const alreadyExists = quizHistory.some(entry => 
+        entry.id === quizId || 
+        (entry.title === historyEntry.title && 
+         entry.date === historyEntry.date && 
+         entry.score === historyEntry.score)
+      );
+      
+      if (!alreadyExists) {
+        // Add new entry to the beginning of the array if it doesn't exist already
+        quizHistory.unshift(historyEntry);
+        
+        // Limit history to last 50 quizzes
+        if (quizHistory.length > 50) {
+          quizHistory = quizHistory.slice(0, 50);
+        }
+        
+        // Save back to localStorage
+        localStorage.setItem("quizHistory", JSON.stringify(quizHistory));
+        
+        console.log("Quiz saved to localStorage history:", historyEntry);
+        
+        // If user is authenticated, also save to database
+        if (session?.user) {
+          try {
+            // First check if this quiz is already in the database
+            const checkResponse = await fetch("/api/quiz-history", {
+              method: "GET",
+            });
+            
+            if (checkResponse.ok) {
+              const existingData = await checkResponse.json();
+              const existingEntry = existingData.history?.find((entry: any) => 
+                entry.quizId === quizId || 
+                (entry.title === historyEntry.title && 
+                 entry.date === historyEntry.date && 
+                 entry.score === historyEntry.score)
+              );
+              
+              // Only save if not already in database
+              if (!existingEntry) {
+                const response = await fetch("/api/quiz-history", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    quizId: historyEntry.id,
+                    title: historyEntry.title,
+                    score: historyEntry.score,
+                    totalQuestions: historyEntry.totalQuestions,
+                    correctAnswers: historyEntry.correctAnswers,
+                    date: historyEntry.date,
+                    timeTaken: historyEntry.timeTaken
+                  }),
+                });
+                
+                if (!response.ok) {
+                  console.error("Failed to save quiz to database:", await response.json());
+                } else {
+                  console.log("Quiz saved to database history");
+                }
+              } else {
+                console.log("Quiz already exists in database, skipping save");
+              }
+            } else {
+              console.error("Failed to check existing quiz entries:", await checkResponse.json());
+            }
+          } catch (dbError) {
+            console.error("Error saving quiz to database:", dbError);
+            // Continue even if database save fails
+          }
+        }
+      } else {
+        console.log("Quiz already exists in history, skipping duplicate save");
+      }
+    } catch (error) {
+      console.error("Error saving quiz to history:", error);
+    }
+  }
+  
   // Format time in minutes and seconds
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -76,7 +214,7 @@ export default function QuizResultsPage() {
     return `${mins}m ${secs}s`
   }
   
-  if (loading || !results || !quiz) {
+  if (loading || !results) {
     return (
       <div className="container py-8">
         <div className="max-w-3xl mx-auto text-center">
@@ -302,96 +440,173 @@ export default function QuizResultsPage() {
         
         <h2 className="text-2xl font-bold mb-4">Question Summary</h2>
         
-        <Card className="mb-8">
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold">Performance at a glance</h3>
-              <div className="flex items-center gap-4">
-                <div className="flex items-center">
-                  <div className="w-3 h-3 bg-green-500 rounded-full mr-2"></div>
-                  <span className="text-sm">Correct ({results.correctAnswers})</span>
-                </div>
-                <div className="flex items-center">
-                  <div className="w-3 h-3 bg-red-500 rounded-full mr-2"></div>
-                  <span className="text-sm">Incorrect ({results.totalQuestions - results.correctAnswers})</span>
+        {quiz && quiz.questions && (
+          <Card className="mb-8">
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold">Performance at a glance</h3>
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center">
+                    <div className="w-3 h-3 bg-green-500 rounded-full mr-2"></div>
+                    <span className="text-sm">Correct ({results.correctAnswers})</span>
+                  </div>
+                  <div className="flex items-center">
+                    <div className="w-3 h-3 bg-red-500 rounded-full mr-2"></div>
+                    <span className="text-sm">Incorrect ({results.totalQuestions - results.correctAnswers})</span>
+                  </div>
                 </div>
               </div>
-            </div>
-            
-            {/* Questions summary visualization */}
-            <div className="flex h-8 mb-6 rounded-md overflow-hidden">
-              {quiz.questions.map((_: any, index: number) => (
-                <div 
-                  key={index}
-                  className={`h-full ${
-                    results.userAnswers[index] === quiz.questions[index].answer ? 
-                      "bg-green-500" : "bg-red-500"
-                  }`}
-                  style={{ width: `${100 / results.totalQuestions}%` }}
-                  title={`Question ${index + 1}: ${
-                    results.userAnswers[index] === quiz.questions[index].answer ? 
-                      "Correct" : "Incorrect"
-                  }`}
-                ></div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+              
+              {/* Questions summary visualization */}
+              <div className="flex h-8 mb-6 rounded-md overflow-hidden">
+                {quiz.questions.map((q: any, index: number) => {
+                  // Handle both answer formats
+                  const correctAnswer = q.answer !== undefined 
+                    ? q.answer 
+                    : q.options?.findIndex((opt: string) => opt === q.correctAnswer) || 0;
+                  
+                  const isCorrect = results.userAnswers[index] === correctAnswer;
+                  
+                  return (
+                    <div 
+                      key={index}
+                      className={`h-full ${isCorrect ? "bg-green-500" : "bg-red-500"}`}
+                      style={{ width: `${100 / results.totalQuestions}%` }}
+                      title={`Question ${index + 1}: ${isCorrect ? "Correct" : "Incorrect"}`}
+                    ></div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
         
         <div className="space-y-4 mb-8">
-          {quiz.questions.map((question: any, index: number) => (
-            <Card key={index} className={`
-              border-l-4 
-              ${results.userAnswers[index] === question.answer ? 
-                "border-l-green-500" : 
-                "border-l-red-500"
-              }
-            `}>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <div>
-                  <CardTitle className="text-md">Question {index + 1}</CardTitle>
-                  <CardDescription>
-                    {results.userAnswers[index] === question.answer ? 
-                      "Correct" : 
-                      "Incorrect"
-                    }
-                  </CardDescription>
-                </div>
-                {results.userAnswers[index] === question.answer ? (
-                  <CheckCircle className="h-5 w-5 text-green-500" />
-                ) : (
-                  <XCircle className="h-5 w-5 text-red-500" />
-                )}
-              </CardHeader>
-              <CardContent>
-                <p className="font-medium mb-2">{question.question}</p>
-                <div className="space-y-2">
-                  {question.options.map((option: string, optionIndex: number) => (
-                    <div 
-                      key={optionIndex} 
-                      className={`p-2 rounded-md ${
-                        optionIndex === question.answer ? 
-                          "bg-green-100" : 
-                        optionIndex === results.userAnswers[index] && 
-                        optionIndex !== question.answer ? 
-                          "bg-red-100" : 
-                          "bg-gray-50"
-                      }`}
-                    >
-                      {option}
-                      {optionIndex === question.answer && (
-                        <span className="ml-2 text-sm text-green-600">(Correct)</span>
-                      )}
-                      {optionIndex === results.userAnswers[index] && 
-                       optionIndex !== question.answer && (
-                        <span className="ml-2 text-sm text-red-600">(Your answer)</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+          {quiz.questions.map((question: any, index: number) => {
+            // Determine if this is a multiple-choice question
+            const isMultipleChoice = question.type === "multiple";
+            
+            // Get the correct answer(s)
+            const correctAnswers = isMultipleChoice 
+              ? (Array.isArray(question.answer) ? question.answer : [question.answer]) 
+              : question.answer;
+            
+            // Get user answers
+            const userSelectedAnswers = isMultipleChoice
+              ? (Array.isArray(results.userAnswers[index]) ? results.userAnswers[index] : [])
+              : results.userAnswers[index];
+            
+            // For multiple choice, check if all selections match
+            const isMultipleChoiceCorrect = isMultipleChoice && 
+              Array.isArray(userSelectedAnswers) && 
+              Array.isArray(correctAnswers) &&
+              userSelectedAnswers.length === correctAnswers.length && 
+              [...userSelectedAnswers].sort().toString() === [...correctAnswers].sort().toString();
+              
+            // Is the answer correct overall
+            const isCorrect = isMultipleChoice 
+              ? isMultipleChoiceCorrect 
+              : userSelectedAnswers === correctAnswers;
+            
+            return (
+              <Card key={index} className={`
+                border-l-4 
+                ${isCorrect ? 
+                  "border-l-green-500" : 
+                  "border-l-red-500"
+                }
+              `}>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <div>
+                    <CardTitle className="text-md">Question {index + 1}</CardTitle>
+                    <CardDescription>
+                      {isCorrect ? "Correct" : "Incorrect"}
+                      {isMultipleChoice && " (Multiple Choice)"}
+                    </CardDescription>
+                  </div>
+                  {isCorrect ? (
+                    <CheckCircle className="h-5 w-5 text-green-500" />
+                  ) : (
+                    <XCircle className="h-5 w-5 text-red-500" />
+                  )}
+                </CardHeader>
+                <CardContent>
+                  <p className="font-medium mb-2">{question.question}</p>
+                  <div className="space-y-2">
+                    {question.options.map((option: string, optionIndex: number) => {
+                      // For multiple choice - check if this option was selected by user
+                      const wasSelected = isMultipleChoice 
+                        ? Array.isArray(userSelectedAnswers) && userSelectedAnswers.includes(optionIndex)
+                        : optionIndex === userSelectedAnswers;
+                        
+                      // For multiple choice - check if this option was correct  
+                      const wasCorrect = isMultipleChoice
+                        ? Array.isArray(correctAnswers) && correctAnswers.includes(optionIndex)
+                        : optionIndex === correctAnswers;
+                        
+                      // Determine CSS class based on correctness
+                      let bgColorClass = "bg-muted";
+                      
+                      if (wasCorrect && wasSelected) {
+                        // Correct selection
+                        bgColorClass = "bg-green-500/20 dark:bg-green-500/30 border border-green-500/50";
+                      } else if (wasCorrect && !wasSelected) {
+                        // Missed correct answer
+                        bgColorClass = "bg-blue-500/20 dark:bg-blue-500/30 border border-blue-500/50";
+                      } else if (!wasCorrect && wasSelected) {
+                        // Incorrect selection
+                        bgColorClass = "bg-red-500/20 dark:bg-red-500/30 border border-red-500/50";
+                      }
+                      
+                      return (
+                        <div 
+                          key={optionIndex} 
+                          className={`p-2 rounded-md flex justify-between items-center ${bgColorClass}`}
+                        >
+                          <div className="flex items-center gap-2">
+                            {isMultipleChoice ? (
+                              // Checkbox for multiple choice
+                              <div className={`h-4 w-4 rounded flex-shrink-0 ${
+                                wasSelected ? "bg-primary border-primary" : "border border-muted-foreground"
+                              }`}>
+                                {wasSelected && (
+                                  <div className="h-2 w-2 rounded-sm bg-white m-auto"></div>
+                                )}
+                              </div>
+                            ) : (
+                              // Radio for single choice
+                              <div className={`h-4 w-4 rounded-full flex-shrink-0 ${
+                                wasSelected ? "bg-primary border-primary" : "border border-muted-foreground"
+                              }`}>
+                                {wasSelected && (
+                                  <div className="h-2 w-2 rounded-full bg-white m-auto"></div>
+                                )}
+                              </div>
+                            )}
+                            <span>{option}</span>
+                          </div>
+                          <div>
+                            {wasCorrect && (
+                              <span className="text-sm font-medium text-green-600 dark:text-green-400 flex items-center">
+                                <CheckCircle className="h-4 w-4 mr-1" />
+                                Correct Answer
+                              </span>
+                            )}
+                            {!wasCorrect && wasSelected && (
+                              <span className="text-sm font-medium text-red-600 dark:text-red-400 flex items-center">
+                                <XCircle className="h-4 w-4 mr-1" />
+                                Your Answer
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
         
         <div className="flex justify-center">

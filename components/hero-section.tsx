@@ -2,24 +2,58 @@
 
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { ArrowRight, Upload } from "lucide-react"
+import { ArrowRight, Upload, ArrowRightCircle, Sparkles } from "lucide-react"
 import { LoginModal } from "@/components/login-modal"
 import { SignupModal } from "@/components/signup-modal"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useAuth } from "@/components/auth-provider"
 
 export function HeroSection() {
   const router = useRouter()
-  const { user } = useAuth()
+  const { user, isAuthenticated } = useAuth()
   const [isLoginOpen, setIsLoginOpen] = useState(false)
   const [isSignupOpen, setIsSignupOpen] = useState(false)
+  const [isAnimating, setIsAnimating] = useState(false)
+
+  useEffect(() => {
+    const handleLoginModal = () => {
+      setIsSignupOpen(false)
+      // Here you would open the login modal
+      // For now, we'll just redirect to the login page
+      router.push('/login')
+    }
+
+    window.addEventListener('openLoginModal', handleLoginModal)
+    return () => window.removeEventListener('openLoginModal', handleLoginModal)
+  }, [router])
 
   const handleGetStarted = () => {
-    if (user) {
-      router.push("/upload")
+    if (isAuthenticated) {
+      router.push("/quiz")
     } else {
-      setIsSignupOpen(true)
+      const event = new CustomEvent("openSignupModal")
+      window.dispatchEvent(event)
     }
+  }
+
+  const handleGenerateSummary = () => {
+    router.push("/summary")
+  }
+
+  const handleStartQuiz = () => {
+    setIsAnimating(true)
+    setTimeout(() => {
+      if (isAuthenticated) {
+        router.push("/upload")
+      } else {
+        setIsSignupOpen(true)
+      }
+    }, 1000)
+  }
+
+  const handleSignupClose = () => {
+    setIsSignupOpen(false)
+    setIsAnimating(false)
   }
 
   return (
@@ -28,7 +62,12 @@ export function HeroSection() {
 
       <div className="container relative z-10 flex flex-col items-center justify-center py-20 text-center">
         <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight mb-4 max-w-3xl">
-          Upload. Generate. Quiz{" "}
+          <span className="inline-block hover:scale-110 transition-transform duration-300 cursor-pointer">Upload</span>
+          <span className="mx-2">.</span>
+          <span className="inline-block hover:scale-110 transition-transform duration-300 cursor-pointer">Generate</span>
+          <span className="mx-2">.</span>
+          <span className="inline-block hover:scale-110 transition-transform duration-300 cursor-pointer">Quiz</span>
+          {" "}
           <span className="bg-clip-text text-transparent bg-gradient-to-r from-blue-500 to-teal-500">Smartly.</span>
         </h1>
         <p className="text-xl text-muted-foreground mb-8 max-w-2xl">
@@ -37,12 +76,10 @@ export function HeroSection() {
         </p>
         <div className="flex flex-col sm:flex-row gap-4 justify-center">
           <Button size="lg" onClick={handleGetStarted}>
-            Get Started
-            <ArrowRight className="ml-2 h-4 w-4" />
+            Generate Quiz
           </Button>
-          <Button size="lg" variant="outline" onClick={() => router.push("/upload")}>
-            <Upload className="mr-2 h-4 w-4" />
-            Upload Document
+          <Button size="lg" variant="outline" onClick={handleGenerateSummary}>
+            Generate Summary
           </Button>
         </div>
 
@@ -64,14 +101,31 @@ export function HeroSection() {
                 <h4 className="font-medium">Quiz Generated!</h4>
                 <p className="text-sm text-muted-foreground">15 questions from your document</p>
               </div>
-              <Button size="sm">Start Quiz</Button>
+              <div className="flex items-center gap-x-6 mt-4">
+                <Button
+                  size="lg"
+                  className="group relative overflow-hidden"
+                  onClick={handleStartQuiz}
+                >
+                  <span className="absolute inset-0 bg-gradient-to-r from-primary/20 to-primary/10 group-hover:opacity-100 opacity-0 transition-opacity duration-300" />
+                  <span className="absolute inset-0 bg-gradient-to-r from-primary/10 to-primary/20 group-hover:opacity-100 opacity-0 transition-opacity duration-300" />
+                  <span className="relative flex items-center gap-2">
+                    Start Quiz
+                    <ArrowRightCircle
+                      className={`h-5 w-5 transition-all duration-300 ${
+                        isAnimating ? "animate-spin" : "group-hover:translate-x-1"
+                      }`}
+                    />
+                  </span>
+                </Button>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
       <LoginModal isOpen={isLoginOpen} onClose={() => setIsLoginOpen(false)} />
-      <SignupModal isOpen={isSignupOpen} onClose={() => setIsSignupOpen(false)} />
+      <SignupModal isOpen={isSignupOpen} onClose={handleSignupClose} />
     </div>
   )
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useTheme } from "next-themes"
 import { Button } from "@/components/ui/button"
@@ -9,22 +9,70 @@ import { LoginModal } from "@/components/login-modal"
 import { SignupModal } from "@/components/signup-modal"
 import { useAuth } from "@/components/auth-provider"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { FileText, Home, LogIn, LogOut, Menu, PieChart, User, X } from "lucide-react"
+import { FileText, Home, LogIn, LogOut, Menu, PieChart, User, X, VideoIcon } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { signOut, useSession } from "next-auth/react"
 
 export function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [isLoginOpen, setIsLoginOpen] = useState(false)
   const [isSignupOpen, setIsSignupOpen] = useState(false)
   const { theme } = useTheme()
-  const { user, logout } = useAuth()
+  const { isAuthenticated } = useAuth()
+  const { data: session } = useSession()
+  const router = useRouter()
+
+  // Add event listeners for custom events
+  useEffect(() => {
+    const handleOpenLoginModal = () => {
+      setIsLoginOpen(true);
+    };
+
+    const handleOpenSignupModal = () => {
+      setIsSignupOpen(true);
+    };
+
+    window.addEventListener("openLoginModal", handleOpenLoginModal);
+    window.addEventListener("openSignupModal", handleOpenSignupModal);
+
+    return () => {
+      window.removeEventListener("openLoginModal", handleOpenLoginModal);
+      window.removeEventListener("openSignupModal", handleOpenSignupModal);
+    };
+  }, []);
 
   const toggleMenu = () => setIsMenuOpen(!isMenuOpen)
 
   const navLinks = [
     { name: "Home", href: "/", icon: <Home className="h-4 w-4 mr-2" /> },
-    { name: "Upload", href: "/upload", icon: <FileText className="h-4 w-4 mr-2" /> },
+    { name: "Quiz", href: "/upload", icon: <FileText className="h-4 w-4 mr-2" /> },
+    { name: "Summary", href: "/summary", icon: <FileText className="h-4 w-4 mr-2" /> },
+    { name: "Video Summarizer", href: "/video-summarizer", icon: <VideoIcon className="h-4 w-4 mr-2" /> },
     { name: "Dashboard", href: "/dashboard", icon: <PieChart className="h-4 w-4 mr-2" /> },
   ]
+
+  const handleLogin = () => {
+    setIsSignupOpen(false)
+    setIsLoginOpen(true)
+  }
+
+  const handleSignup = () => {
+    setIsLoginOpen(false)
+    setIsSignupOpen(true)
+  }
+
+  const handleLogout = async () => {
+    await signOut({ redirect: false })
+    router.push('/')
+  }
+
+  const handleProfile = () => {
+    router.push('/profile')
+  }
+
+  const handleNavigation = (href: string) => {
+    router.push(href)
+  }
 
   return (
     <>
@@ -41,20 +89,21 @@ export function Navbar() {
           {/* Desktop Navigation */}
           <nav className="hidden md:flex items-center gap-6">
             {navLinks.map((link) => (
-              <Link
+              <Button
                 key={link.name}
-                href={link.href}
+                variant="ghost"
+                onClick={() => handleNavigation(link.href)}
                 className="text-sm font-medium transition-colors hover:text-primary"
               >
                 {link.name}
-              </Link>
+              </Button>
             ))}
           </nav>
 
           <div className="flex items-center gap-2">
             <ModeToggle />
 
-            {user ? (
+            {isAuthenticated ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" className="rounded-full">
@@ -62,11 +111,11 @@ export function Navbar() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleProfile}>
                     <User className="mr-2 h-4 w-4" />
                     <span>Profile</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={logout}>
+                  <DropdownMenuItem onClick={handleLogout}>
                     <LogOut className="mr-2 h-4 w-4" />
                     <span>Logout</span>
                   </DropdownMenuItem>
@@ -74,10 +123,10 @@ export function Navbar() {
               </DropdownMenu>
             ) : (
               <div className="hidden md:flex items-center gap-2">
-                <Button variant="ghost" onClick={() => setIsLoginOpen(true)}>
+                <Button variant="ghost" onClick={handleLogin}>
                   Login
                 </Button>
-                <Button onClick={() => setIsSignupOpen(true)}>Sign Up</Button>
+                <Button onClick={handleSignup}>Sign Up</Button>
               </div>
             )}
 
@@ -93,22 +142,25 @@ export function Navbar() {
           <div className="md:hidden border-t">
             <div className="container py-4 grid gap-4">
               {navLinks.map((link) => (
-                <Link
+                <Button
                   key={link.name}
-                  href={link.href}
+                  variant="ghost"
+                  onClick={() => {
+                    handleNavigation(link.href)
+                    setIsMenuOpen(false)
+                  }}
                   className="flex items-center text-sm font-medium transition-colors hover:text-primary"
-                  onClick={() => setIsMenuOpen(false)}
                 >
                   {link.icon}
                   {link.name}
-                </Link>
+                </Button>
               ))}
-              {!user ? (
+              {!isAuthenticated ? (
                 <div className="grid gap-2 pt-2 border-t">
                   <Button
                     variant="outline"
                     onClick={() => {
-                      setIsLoginOpen(true)
+                      handleLogin()
                       setIsMenuOpen(false)
                     }}
                   >
@@ -117,7 +169,7 @@ export function Navbar() {
                   </Button>
                   <Button
                     onClick={() => {
-                      setIsSignupOpen(true)
+                      handleSignup()
                       setIsMenuOpen(false)
                     }}
                   >
@@ -128,7 +180,7 @@ export function Navbar() {
                 <Button
                   variant="outline"
                   onClick={() => {
-                    logout()
+                    handleLogout()
                     setIsMenuOpen(false)
                   }}
                 >

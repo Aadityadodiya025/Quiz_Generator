@@ -9,80 +9,179 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
 import { ArrowLeft, ArrowRight, Clock, CheckCircle, XCircle } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
+import { UploadSection } from "@/components/upload-section"
 
 // Quiz interface
 interface QuizQuestion {
   question: string;
   options: string[];
-  answer: number;
+  answer?: number | number[]; // Can be a single index or array for multiple-select
+  correctAnswer?: string;
+  type?: "single" | "multiple"; // Type of question: single-select or multiple-select
 }
 
 interface Quiz {
-  id: string;
+  id?: string;
   title: string;
   questions: QuizQuestion[];
   startTime?: string;
 }
 
 export default function QuizPage() {
+  const router = useRouter()
   const [quiz, setQuiz] = useState<Quiz | null>(null)
   const [loading, setLoading] = useState(true)
   const [currentQuestion, setCurrentQuestion] = useState(0)
-  const [userAnswers, setUserAnswers] = useState<Record<number, number>>({})
+  const [userAnswers, setUserAnswers] = useState<Record<number, number | number[]>>({})
   const [timeLeft, setTimeLeft] = useState(1200) // 20 minutes in seconds
   const [quizSubmitted, setQuizSubmitted] = useState(false)
   const [showResults, setShowResults] = useState(false)
   const [score, setScore] = useState(0)
   
-  const router = useRouter()
   const { toast } = useToast()
 
-  // Load quiz on mount
   useEffect(() => {
-    const storedQuiz = sessionStorage.getItem("activeQuiz")
-    
-    if (storedQuiz) {
-      try {
-        const parsedQuiz = JSON.parse(storedQuiz)
+    // Function to normalize the quiz data structure
+    const normalizeQuizData = (data: any): Quiz | null => {
+      // Check if data exists
+      if (!data) {
+        console.log("No quiz data provided");
+        return null;
+      }
+      
+      // Check if the data is an empty object
+      if (typeof data === 'object' && Object.keys(data).length === 0) {
+        console.log("Empty quiz data object, skipping normalization");
+        return null;
+      }
+      
+      // Check if we have the minimal required structure
+      if (!data.questions || !Array.isArray(data.questions) || data.questions.length === 0) {
+        console.error("Invalid quiz data structure:", data);
+        return null;
+      }
+      
+      const normalizedQuestions = data.questions.map((q: any, index: number) => {
+        // Handle both formats: correctAnswer (string) or answer (number)
+        let answerValue = q.answer;
         
-        // Add startTime if not already present
-        if (!parsedQuiz.startTime) {
-          parsedQuiz.startTime = new Date().toISOString();
-          // Update session storage with start time
-          sessionStorage.setItem("activeQuiz", JSON.stringify(parsedQuiz));
-          console.log("Quiz start time initialized:", parsedQuiz.startTime);
-        } else {
-          console.log("Quiz already has start time:", parsedQuiz.startTime);
+        // If answer is not provided but correctAnswer is, try to find it
+        if (answerValue === undefined && q.correctAnswer) {
+          // Find the index of correctAnswer in options
+          const answerIndex = q.options.findIndex((option: string) => 
+            option === q.correctAnswer
+          );
+          // If not found, default to first option
+          answerValue = answerIndex === -1 ? 0 : answerIndex;
         }
         
-        setQuiz(parsedQuiz)
-        
-        // Initialize empty answers for all questions
-        const initialAnswers: Record<number, number> = {}
-        parsedQuiz.questions.forEach((_: any, index: number) => {
-          initialAnswers[index] = -1 // -1 means unanswered
-        })
-        setUserAnswers(initialAnswers)
-      } catch (error) {
-        console.error("Failed to parse quiz data:", error)
-        toast({
-          title: "Error loading quiz",
-          description: "Quiz data is corrupted. Please try again.",
-          variant: "destructive"
-        })
-        router.push("/upload")
-      }
-    } else {
-      toast({
-        title: "No active quiz",
-        description: "Please generate a quiz first",
-        variant: "destructive"
-      })
-      router.push("/upload")
-    }
+        return {
+          question: q.question || "Question not available",
+          options: q.options || [],
+          answer: answerValue,
+          correctAnswer: q.correctAnswer,
+          type: q.type || "single" // Default to single-select if not specified
+        };
+      });
+      
+      return {
+        id: data.id || `quiz-${Date.now()}`,
+        title: data.title || "Quiz",
+        questions: normalizedQuestions,
+        startTime: data.startTime
+      };
+    };
     
-    setLoading(false)
-  }, [router, toast])
+    const loadQuizData = async () => {
+      // Try to get the quiz from session storage
+      try {
+        console.log("Attempting to load quiz data from session storage");
+        
+        // First try "activeQuiz"
+        let storedQuiz = sessionStorage.getItem("activeQuiz");
+        let sourceKey = "activeQuiz";
+        
+        // If not found, try "generatedQuiz"
+        if (!storedQuiz || storedQuiz === "undefined" || storedQuiz === "null") {
+          storedQuiz = sessionStorage.getItem("generatedQuiz");
+          sourceKey = "generatedQuiz";
+        }
+        
+        // If not found, try "quizData"
+        if (!storedQuiz || storedQuiz === "undefined" || storedQuiz === "null") {
+          storedQuiz = sessionStorage.getItem("quizData");
+          sourceKey = "quizData";
+        }
+        
+        if (storedQuiz && storedQuiz !== "undefined" && storedQuiz !== "null") {
+          try {
+            const parsedQuiz = JSON.parse(storedQuiz);
+            console.log(`Retrieved quiz data from ${sourceKey}:`, parsedQuiz);
+            
+            const normalizedQuiz = normalizeQuizData(parsedQuiz);
+            
+            if (normalizedQuiz) {
+              console.log("Quiz data normalized successfully");
+              
+              // Add startTime if not already present
+              if (!normalizedQuiz.startTime) {
+                normalizedQuiz.startTime = new Date().toISOString();
+                console.log("Added start time to quiz data:", normalizedQuiz.startTime);
+              }
+              
+              // Save the normalized quiz back to session storage
+              sessionStorage.setItem("activeQuiz", JSON.stringify(normalizedQuiz));
+              console.log("Saved normalized quiz data to activeQuiz in session storage");
+              
+              setQuiz(normalizedQuiz);
+              
+              // Initialize empty answers for all questions
+              const initialAnswers: Record<number, number | number[]> = {};
+              normalizedQuiz.questions.forEach((_: any, index: number) => {
+                initialAnswers[index] = -1; // -1 means unanswered
+              });
+              setUserAnswers(initialAnswers);
+              setLoading(false);
+              console.log("Quiz initialized successfully with", normalizedQuiz.questions.length, "questions");
+              return;
+            } else {
+              console.error(`Failed to normalize quiz data from ${sourceKey}:`, parsedQuiz);
+              throw new Error(`Invalid quiz structure in ${sourceKey}`);
+            }
+          } catch (parseError) {
+            console.error(`Error parsing quiz data from ${sourceKey}:`, parseError);
+            throw new Error(`Failed to parse quiz data from ${sourceKey}`);
+          }
+        } else {
+          console.warn("No valid quiz data found in session storage");
+          throw new Error("No valid quiz data found");
+        }
+      } catch (error) {
+        console.error("Failed to load quiz:", error);
+        // Clean up any invalid data
+        sessionStorage.removeItem("activeQuiz");
+        
+        // Keep other data intact in case it's valid but there's just no active quiz
+        // sessionStorage.removeItem("generatedQuiz");
+        // sessionStorage.removeItem("quizData");
+        
+        toast({
+          title: "No active quiz",
+          description: "Please generate a quiz first",
+          variant: "default"
+        });
+        
+        // Redirect to the upload page
+        setTimeout(() => {
+          router.push("/upload");
+        }, 1000);
+      }
+      
+      setLoading(false);
+    };
+    
+    loadQuizData();
+  }, [router, toast]);
 
   // Timer effect
   useEffect(() => {
@@ -113,60 +212,124 @@ export default function QuizPage() {
   }
 
   const handleAnswerChange = (questionIndex: number, selectedOption: number) => {
-    setUserAnswers({
-      ...userAnswers,
-      [questionIndex]: selectedOption
-    })
+    const currentQuestion = quiz?.questions[questionIndex];
+    
+    // Handle multiple-select questions differently
+    if (currentQuestion?.type === "multiple") {
+      // Get current selected options or initialize empty array
+      const currentSelections = Array.isArray(userAnswers[questionIndex]) 
+        ? [...userAnswers[questionIndex] as number[]] 
+        : [];
+      
+      // Toggle the selection
+      const selectionIndex = currentSelections.indexOf(selectedOption);
+      if (selectionIndex === -1) {
+        // Add the option if not already selected
+        currentSelections.push(selectedOption);
+      } else {
+        // Remove the option if already selected
+        currentSelections.splice(selectionIndex, 1);
+      }
+      
+      // Update user answers
+      setUserAnswers({
+        ...userAnswers,
+        [questionIndex]: currentSelections
+      });
+    } else {
+      // Single-select questions (radio buttons)
+      setUserAnswers({
+        ...userAnswers,
+        [questionIndex]: selectedOption
+      });
+    }
   }
 
   const handleSubmitQuiz = () => {
     if (!quiz) return
     
-    setQuizSubmitted(true)
-    
-    // Calculate score
-    let correctAnswers = 0
-    quiz.questions.forEach((question, index) => {
-      if (userAnswers[index] === question.answer) {
-        correctAnswers++
+    try {
+      setQuizSubmitted(true)
+      
+      // Calculate score
+      let correctAnswers = 0
+      quiz.questions.forEach((question, index) => {
+        if (question.type === "multiple" && Array.isArray(question.answer) && Array.isArray(userAnswers[index])) {
+          // For multiple-select, check if selected options match exactly
+          const userSelectedOptions = userAnswers[index] as number[];
+          const correctOptions = question.answer as number[];
+          
+          // Sort both arrays for comparison
+          const sortedUser = [...userSelectedOptions].sort();
+          const sortedCorrect = [...correctOptions].sort();
+          
+          // Check if arrays are identical
+          const isCorrect = 
+            sortedUser.length === sortedCorrect.length && 
+            sortedUser.every((val, i) => val === sortedCorrect[i]);
+          
+          if (isCorrect) correctAnswers++;
+        } else if (question.answer !== undefined && userAnswers[index] === question.answer) {
+          // Single-select question
+          correctAnswers++;
+        }
+      })
+      
+      const finalScore = Math.round((correctAnswers / quiz.questions.length) * 100)
+      setScore(finalScore)
+      
+      // Calculate time taken (in seconds)
+      const timeTaken = quiz.startTime 
+        ? Math.floor((new Date().getTime() - new Date(quiz.startTime).getTime()) / 1000)
+        : 0
+      
+      console.log("Quiz submission:", {
+        startTime: quiz.startTime,
+        endTime: new Date().toISOString(),
+        timeTaken: timeTaken
+      });
+      
+      // Store results in session storage
+      const results = {
+        quizId: quiz.id || `quiz-${Date.now()}`,
+        title: quiz.title,
+        score: finalScore,
+        totalQuestions: quiz.questions.length,
+        correctAnswers,
+        userAnswers,
+        completedAt: new Date().toISOString(),
+        timeTaken: timeTaken,
+        timeAllotted: 1200, // 20 minutes in seconds
       }
-    })
-    
-    const finalScore = Math.round((correctAnswers / quiz.questions.length) * 100)
-    setScore(finalScore)
-    
-    // Calculate time taken (in seconds)
-    const timeTaken = quiz.startTime 
-      ? Math.floor((new Date().getTime() - new Date(quiz.startTime).getTime()) / 1000)
-      : 0
-    
-    console.log("Quiz submission:", {
-      startTime: quiz.startTime,
-      endTime: new Date().toISOString(),
-      timeTaken: timeTaken
-    });
-    
-    // Store results in session storage
-    const results = {
-      quizId: quiz.id,
-      title: quiz.title,
-      score: finalScore,
-      totalQuestions: quiz.questions.length,
-      correctAnswers,
-      userAnswers,
-      completedAt: new Date().toISOString(),
-      timeTaken: timeTaken,
-      timeAllotted: 1200, // 20 minutes in seconds
+      
+      sessionStorage.setItem("quizResults", JSON.stringify(results))
+      
+      // Also store the quiz for reference on the results page
+      sessionStorage.setItem("completedQuiz", JSON.stringify(quiz))
+      
+      // Navigate to results page instead of showing results in this component
+      router.push('/quiz-results')
+    } catch (error) {
+      console.error("Error submitting quiz:", error);
+      toast({
+        title: "Error",
+        description: "There was a problem submitting your quiz. Please try again.",
+        variant: "destructive"
+      });
     }
-    
-    sessionStorage.setItem("quizResults", JSON.stringify(results))
-    
-    // Navigate to results page instead of showing results in this component
-    router.push('/quiz-results')
   }
 
   const isQuestionAnswered = (questionIndex: number) => {
-    return userAnswers[questionIndex] !== undefined && userAnswers[questionIndex] !== -1
+    const currentQuestion = quiz?.questions[questionIndex];
+    const answer = userAnswers[questionIndex];
+    
+    if (currentQuestion?.type === "multiple") {
+      // For multiple-select, check if any option is selected
+      return Array.isArray(answer) && answer.length > 0;
+    }
+    
+    // For single-select
+    return answer !== undefined && answer !== -1;
   }
 
   const allQuestionsAnswered = () => {
@@ -197,7 +360,7 @@ export default function QuizPage() {
             <h1 className="text-3xl font-bold mb-4">Quiz Results</h1>
             <div className="text-6xl font-bold mb-4">{score}%</div>
             <p className="text-lg mb-4">
-              You got {quiz.questions.filter((q, i) => userAnswers[i] === q.answer).length} out of {quiz.questions.length} questions correct
+              You got {quiz.questions.filter((q, i) => isQuestionAnswered(i)).length} out of {quiz.questions.length} questions correct
             </p>
             
             <div className="flex gap-4 mt-4">
@@ -214,10 +377,10 @@ export default function QuizPage() {
             <div className="space-y-6">
               <h2 className="text-2xl font-bold mt-8">Question Review</h2>
               {quiz.questions.map((question, index) => (
-                <Card key={index} className={`mb-4 border-2 ${userAnswers[index] === question.answer ? "border-green-200" : "border-red-200"}`}>
+                <Card key={index} className={`mb-4 border-2 ${isQuestionAnswered(index) ? "border-green-200" : "border-red-200"}`}>
                   <CardHeader className="flex flex-row items-start justify-between">
                     <CardTitle className="text-lg">Question {index + 1}</CardTitle>
-                    {userAnswers[index] === question.answer ? (
+                    {isQuestionAnswered(index) ? (
                       <CheckCircle className="h-5 w-5 text-green-500" />
                     ) : (
                       <XCircle className="h-5 w-5 text-red-500" />
@@ -294,21 +457,55 @@ export default function QuizPage() {
             <CardTitle className="text-xl">{question.question}</CardTitle>
           </CardHeader>
           <CardContent>
-            <RadioGroup
-              value={userAnswers[currentQuestion]?.toString() || ""}
-              onValueChange={(value) => handleAnswerChange(currentQuestion, Number(value))}
-            >
+            {question.type === "multiple" ? (
+              // Multiple-select question with checkboxes
               <div className="space-y-3">
-                {question.options.map((option, index) => (
-                  <div key={index} className="flex items-center space-x-2">
-                    <RadioGroupItem value={index.toString()} id={`option-${index}`} />
-                    <Label htmlFor={`option-${index}`} className="flex-1">
-                      {option}
-                    </Label>
-                  </div>
-                ))}
+                <p className="text-sm text-muted-foreground mb-2">
+                  Select all that apply
+                </p>
+                {question.options.map((option, index) => {
+                  // Check if this option is in the user's selections
+                  const isSelected = Array.isArray(userAnswers[currentQuestion]) && 
+                    (userAnswers[currentQuestion] as number[]).includes(index);
+                  
+                  return (
+                    <div key={index} className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id={`option-${index}`}
+                        className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                        checked={isSelected}
+                        onChange={() => handleAnswerChange(currentQuestion, index)}
+                      />
+                      <Label htmlFor={`option-${index}`} className="flex-1">
+                        {option}
+                      </Label>
+                    </div>
+                  );
+                })}
               </div>
-            </RadioGroup>
+            ) : (
+              // Single-select question with radio buttons
+              <RadioGroup
+                value={
+                  userAnswers[currentQuestion] !== undefined 
+                    ? userAnswers[currentQuestion].toString() 
+                    : ""
+                }
+                onValueChange={(value) => handleAnswerChange(currentQuestion, Number(value))}
+              >
+                <div className="space-y-3">
+                  {question.options.map((option, index) => (
+                    <div key={index} className="flex items-center space-x-2">
+                      <RadioGroupItem value={index.toString()} id={`option-${index}`} />
+                      <Label htmlFor={`option-${index}`} className="flex-1">
+                        {option}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </RadioGroup>
+            )}
           </CardContent>
           <CardFooter className="flex justify-between">
             <Button variant="outline" onClick={handlePrevQuestion} disabled={currentQuestion === 0}>
